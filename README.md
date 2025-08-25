@@ -1,8 +1,4 @@
-# hertz-dev
-
-Hertz-dev is an open-source, first-of-its-kind base model for full-duplex conversational audio.
-
-See our blog post for more details: https://si.inc/hertz-dev/
+# speach_to_text_over_web_voice_clone
 
 ## Llasa-3B Text-to-Speech WebApp
 
