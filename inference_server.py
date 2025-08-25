@@ -8,7 +8,21 @@ from fastapi.middleware.cors import CORSMiddleware
 import soundfile as sf
 
 from llasa_model import generate_audio
-from utils import print_colored
+
+# --- Helper Functions ---
+def print_colored(text, color):
+    """Prints text in a specified color."""
+    colors = {
+        "red": "\033[91m",
+        "green": "\033[92m",
+        "yellow": "\033[93m",
+        "blue": "\033[94m",
+        "cyan": "\033[96m",
+        "grey": "\033[90m",
+        "end": "\033[0m",
+    }
+    color_code = colors.get(color, "")
+    print(f"{color_code}{text}{colors['end']}")
 
 # --- Application Setup ---
 app = FastAPI()
