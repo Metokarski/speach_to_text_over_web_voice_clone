@@ -5,7 +5,7 @@ import asyncio
 import base64
 import numpy as np
 import soundfile as sf
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, ClientSettings
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
 import av
 import json
 import io
