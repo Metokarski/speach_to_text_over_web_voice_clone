@@ -9,11 +9,41 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode
 import av
 import json
 import io
+import argparse
+import os
+from dotenv import load_dotenv
 from ocr_component import ocr_component
 
 # --- Configuration ---
-SERVER_URL = "ws://localhost:8000"
-HTTP_SERVER_URL = "http://localhost:8000"
+def get_server_ip():
+    """
+    Determines the server IP address based on a hierarchy of configurations.
+    1. Command-line argument (--server_ip)
+    2. Environment variable (SERVER_IP from .env file)
+    3. Default value ('localhost')
+    """
+    # 1. Check for command-line argument
+    parser = argparse.ArgumentParser(description="Streamlit client for Llasa-3B TTS")
+    parser.add_argument("--server_ip", type=str, help="The IP address of the backend server.")
+    args, _ = parser.parse_known_args()
+    if args.server_ip:
+        print(f"Using server IP from command-line argument: {args.server_ip}")
+        return args.server_ip
+
+    # 2. Check for environment variable
+    load_dotenv()
+    server_ip_env = os.getenv("SERVER_IP")
+    if server_ip_env:
+        print(f"Using server IP from .env file: {server_ip_env}")
+        return server_ip_env
+
+    # 3. Use default value
+    print("Using default server IP: localhost")
+    return "localhost"
+
+SERVER_IP = get_server_ip()
+SERVER_URL = f"ws://{SERVER_IP}:8000"
+HTTP_SERVER_URL = f"http://{SERVER_IP}:8000"
 
 # --- Main Application ---
 st.set_page_config(layout="wide")

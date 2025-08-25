@@ -4,28 +4,65 @@ Hertz-dev is an open-source, first-of-its-kind base model for full-duplex conver
 
 See our blog post for more details: https://si.inc/hertz-dev/
 
+## Llasa-3B Text-to-Speech WebApp
+
+This repository has been refactored to provide a web-based interface for the [HKUSTAudio/Llasa-3B](https://huggingface.co/HKUSTAudio/Llasa-3B) model, enabling text-to-speech with voice cloning from a reference audio file.
+
 ## Setup
 
-Inference is known to work on Python 3.10 and CUDA 12.1. Other versions have not been tested as thoroughly. If you want to use CUDA 12.1, you'll need to install torch with `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121` before running `pip install -r requirements.txt`.
+1.  **Install Dependencies**:
+    ```bash
+    pip install -r requirements.txt
+    pip install -r requirements_webrtc.txt
+    ```
+    For the camera-based OCR feature, you will also need to install Tesseract on your system.
 
-On Ubuntu you may need to install libportaudio: `sudo apt-get install libportaudio2`
-
-All three scripts will automatically download the models to the `./ckpt` directory, and checkpoints are also accessible at https://ckpt.si.inc/hertz-dev/index.txt
+2.  **Configure Environment Variables**:
+    Create a `.env` file in the root of the project by copying the `.env.example` file:
+    ```bash
+    cp .env.example .env
+    ```
+    Edit the `.env` file and add your Hugging Face access token. This is required to download the Llasa-3B model.
+    ```
+    HUGGING_FACE_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ```
 
 ## Usage
 
-We recommend starting by using `inference.ipynb` to generate one- or two-channel completions from a prompt.
+The application runs as two separate processes: a backend server and a frontend client. You must run both simultaneously in two separate terminals.
 
-Then, you can use `inference_client.py` and `inference_server.py` to talk to the model live through your microphone.
-These are currently experimental, and have primarily been tested with Ubuntu on the server and MacOS on the client.
+1.  **Run the Backend Server**:
+    The server handles the model inference and file uploads.
+    ```bash
+    # For local development
+    python -m uvicorn inference_server:app --reload
 
-Alternatively, you can use `inference_client_webrtc.py`, which is built on [streamlit](https://streamlit.io/) + [streamlit-webrtc](https://github.com/whitphx/streamlit-webrtc) and runs in a browser:
-```bash
-# Install additional requirements
-pip install -r requirements_webrtc.txt
-# Run the client
-streamlit run inference_client_webrtc.py
-```
-Then, access the client at [http://localhost:8501](http://localhost:8501).
+    # If running on a remote server, make it accessible externally
+    python -m uvicorn inference_server:app --reload --host 0.0.0.0
+    ```
 
-**Note**: If you host the streamlit client anywhere other than `localhost` you will need to connect with https to avoid errors (see [here](https://github.com/whitphx/streamlit-webrtc?tab=readme-ov-file#serving-from-remote-host) for more info). An easy workaround is to `ssh` from the client into the server with port forwarding `ssh -L 127.0.0.1:8501:remote-host:8501 user@remote-host`, after which you can access the client at [http://localhost:8501](http://localhost:8501) as usual. If serving from a remote host with https, you may need to use a STUN server to establish the connection. You can do this by passing the `--use_ice_servers` flag: `streamlit run inference_client_webrtc.py -- --use_ice_servers`.
+2.  **Run the Frontend Client**:
+    The client is a Streamlit web application.
+    ```bash
+    streamlit run inference_client_webrtc.py
+    ```
+    You can then access the application in your browser at the URL provided by Streamlit.
+
+## Configuration
+
+### Connecting to a Remote Server
+
+If your backend server is running on a different machine (e.g., a cloud GPU instance), you need to tell the client how to connect to it. You can do this in one of two ways:
+
+1.  **Using the `.env` file (Recommended)**:
+    Set the `SERVER_IP` variable in your `.env` file to the public IP address of your server.
+    ```
+    SERVER_IP="000.000.000.00"
+    ```
+
+2.  **Using a Command-Line Argument**:
+    You can specify the server's IP address directly when launching the client. This will override any value set in the `.env` file.
+    ```bash
+    streamlit run inference_client_webrtc.py -- --server_ip 000.000.000.00
+    ```
+    *(Note the extra `--` which is required to pass arguments to the Streamlit script).*
