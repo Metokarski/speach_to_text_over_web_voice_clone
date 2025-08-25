@@ -1,41 +1,16 @@
-import time
-import numpy as np
-from fastapi import FastAPI, WebSocket
-from fastapi.middleware.cors import CORSMiddleware
+import os
 import base64
 import uvicorn
 import traceback
 import numpy as np
-import argparse
+from fastapi import FastAPI, WebSocket, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+import soundfile as sf
 
-import torch as T
-import torch.nn.functional as F
-import torchaudio
-
-import os
-from typing import Optional
-
+from llasa_model import generate_audio
 from utils import print_colored
-from model import get_hertz_dev_config
 
-
-argparse = argparse.ArgumentParser()
-
-argparse.add_argument('--prompt_path', type=str, default='./prompts/bob_mono.wav', help="""
-                      We highly recommend making your own prompt based on a conversation between you and another person.
-                      bob_mono.wav seems to work better for two-channel than bob_stereo.wav.
-                      """)
-args = argparse.parse_args()
-
-
-device = 'cuda' if T.cuda.is_available() else T.device('cpu')
-print_colored(f"Using device: {device}", "grey")
-
-model_config = get_hertz_dev_config(is_split=True)
-
-model = model_config()
-model = model.eval().bfloat16().to(device)
-
+# --- Application Setup ---
 app = FastAPI()
 
 app.add_middleware(
@@ -46,127 +21,93 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- State Management ---
+# For a production app, this state should be managed more robustly (e.g., per-session).
+# For this demo, a simple global variable suffices.
+current_reference_audio = None
 
-# Hyperparams or something.
-SAMPLE_RATE = 16000 # Don't change this
-TEMPS = (0.8, (0.4, 0.1)) # You can change this, but there's also an endpoint for it.
-REPLAY_SECONDS = 3 # What the user hears as context.
+# Ensure the prompts directory exists
+os.makedirs("prompts", exist_ok=True)
 
-class AudioProcessor:
-    def __init__(self, model, prompt_path):
-        self.model = model
-        self.prompt_path = prompt_path
-        self.initialize_state(prompt_path)
-
-    def initialize_state(self, prompt_path):
-        loaded_audio, sr = torchaudio.load(prompt_path)
-        self.replay_seconds = REPLAY_SECONDS
+# --- HTTP Endpoints ---
+@app.post("/upload_reference_audio")
+async def upload_reference_audio(file: UploadFile = File(...)):
+    """
+    Handles uploading of the reference audio file.
+    The file is saved in the 'prompts' directory.
+    """
+    global current_reference_audio
+    try:
+        file_path = os.path.join("prompts", file.filename)
         
-        if sr != SAMPLE_RATE:
-            resampler = torchaudio.transforms.Resample(sr, SAMPLE_RATE)
-            loaded_audio = resampler(loaded_audio)
-            
-        if loaded_audio.shape[0] == 1:
-            loaded_audio = loaded_audio.repeat(2, 1)
-            
-        audio_length = loaded_audio.shape[-1] 
-        num_chunks = audio_length // 2000
-        loaded_audio = loaded_audio[..., :num_chunks * 2000]
-            
-        self.loaded_audio = loaded_audio.to(device)
-            
-        with T.autocast(device_type=device, dtype=T.bfloat16), T.inference_mode():
-                self.model.init_cache(bsize=1, device=device, dtype=T.bfloat16, length=1024)
-                self.next_model_audio = self.model.next_audio_from_audio(self.loaded_audio.unsqueeze(0), temps=TEMPS)
-        self.prompt_buffer = None
-        self.prompt_position = 0
-        self.chunks_until_live = int(self.replay_seconds * 8)
-        self.initialize_prompt_buffer()
-        print_colored("AudioProcessor state initialized", "green")
-
-    def initialize_prompt_buffer(self):
-        self.recorded_audio = self.loaded_audio
-        prompt_audio = self.loaded_audio.reshape(1, 2, -1)
-        prompt_audio = prompt_audio[:, :, -(16000*self.replay_seconds):].cpu().numpy()
-        prompt_audio_mono = prompt_audio.mean(axis=1)
-        self.prompt_buffer = np.array_split(prompt_audio_mono[0], int(self.replay_seconds * 8))
-        print_colored(f"Initialized prompt buffer with {len(self.prompt_buffer)} chunks", "grey")
-    
-    async def process_audio(self, audio_data):
-        if self.chunks_until_live > 0:
-            print_colored(f"Serving from prompt buffer, {self.chunks_until_live} chunks left", "grey")
-            chunk = self.prompt_buffer[int(self.replay_seconds * 8) - self.chunks_until_live]
-            self.chunks_until_live -= 1
-            
-            if self.chunks_until_live == 0:
-                print_colored("Switching to live processing mode", "green")
-
-            time.sleep(0.05)
-            return chunk
+        # Read the content of the uploaded file
+        content = await file.read()
         
-        audio_tensor = T.from_numpy(audio_data).to(device)
-        audio_tensor = audio_tensor.reshape(1, 1, -1)
-        audio_tensor = T.cat([audio_tensor, self.next_model_audio], dim=1)
-        
-        with T.autocast(device_type=device, dtype=T.bfloat16), T.inference_mode():
-            curr_model_audio = self.model.next_audio_from_audio(
-                audio_tensor, 
-                temps=TEMPS
-            )
-        print(f"Recorded audio shape {self.recorded_audio.shape}, audio tensor shape {audio_tensor.shape}")
-        self.recorded_audio = T.cat([self.recorded_audio.cpu(), audio_tensor.squeeze(0).cpu()], dim=-1)
-
-        self.next_model_audio = curr_model_audio
-
-        return curr_model_audio.float().cpu().numpy()
-
-    def cleanup(self):
-        print_colored("Cleaning up audio processor...", "blue")
-        os.makedirs('audio_recordings', exist_ok=True)
-        torchaudio.save(f'audio_recordings/{time.strftime("%d-%H-%M")}.wav', self.recorded_audio.cpu(), SAMPLE_RATE)
-        self.model.deinit_cache()
-        self.initialize_state(self.prompt_path)
-        print_colored("Audio processor cleanup complete", "green")
-
-@app.post("/set_temperature")
-async def set_temperature(token_temp: Optional[float] = None, categorical_temp: Optional[float] = None, gaussian_temp: Optional[float] = None):
-    try:        
-        global TEMPS
-        TEMPS = (token_temp, (categorical_temp, gaussian_temp))
-        
-        print_colored(f"Temperature updated to: {TEMPS}", "green")
-        return {"message": f"Temperature updated to: {TEMPS}", "status": "success"}
+        # Write the content to the new file
+        with open(file_path, "wb") as f:
+            f.write(content)
+            
+        current_reference_audio = file_path
+        print_colored(f"Reference audio updated to: {current_reference_audio}", "green")
+        return {"message": f"File '{file.filename}' uploaded successfully.", "status": "success"}
     except Exception as e:
-        print_colored(f"Error setting temperature: {str(e)}", "red")
-        return {"message": f"Error setting temperature: {str(e)}", "status": "error"}
+        print_colored(f"Error uploading file: {str(e)}", "red")
+        return {"message": f"Error uploading file: {str(e)}", "status": "error"}
 
+# --- WebSocket Endpoint ---
 @app.websocket("/audio")
 async def websocket_endpoint(websocket: WebSocket):
+    """
+    Handles the real-time text-to-speech WebSocket connection.
+    Receives text, generates audio, and streams it back to the client.
+    """
     await websocket.accept()
+    print_colored("WebSocket connection established.", "cyan")
+    
     try:
         while True:
-            data = await websocket.receive_text()
-            audio_data = np.frombuffer(
-                base64.b64decode(data.split(",")[1]),
-                dtype=np.int16
-            )
-            audio_data = audio_data.astype(np.float32) / 32767.0
-            processed_audio = await audio_processor.process_audio(audio_data)
-            processed_audio = (processed_audio * 32767).astype(np.int16)
-            
-            processed_data = base64.b64encode(processed_audio.tobytes()).decode('utf-8')
+            # Receive JSON data from the client
+            data = await websocket.receive_json()
+            text = data.get("text")
+
+            if not text:
+                continue
+
+            if current_reference_audio is None:
+                print_colored("Warning: No reference audio has been uploaded.", "yellow")
+                # Optionally, send a warning back to the client
+                await websocket.send_json({"error": "Please upload a reference audio file first."})
+                continue
+
+            print_colored(f"Received text for TTS: '{text}'", "grey")
+
+            # Generate audio using the Llasa-3B model
+            waveform, sample_rate = generate_audio(text, current_reference_audio)
+
+            if waveform.size == 0:
+                print_colored("Audio generation failed. Skipping.", "red")
+                continue
+
+            # Convert audio to 16-bit PCM format
+            waveform_int16 = (waveform * 32767).astype(np.int16)
+
+            # Encode the audio data in Base64
+            processed_data = base64.b64encode(waveform_int16.tobytes()).decode('utf-8')
+
+            # Send the processed audio back to the client
             await websocket.send_text(f"data:audio/raw;base64,{processed_data}")
-            
+            print_colored(f"Sent {len(waveform_int16) / sample_rate:.2f}s of audio to client.", "grey")
+
     except Exception as e:
-            print_colored(f"WebSocket error: {e}", "red")
-            print_colored(f"Full traceback:\n{traceback.format_exc()}", "red")
+        print_colored(f"WebSocket error: {e}", "red")
+        print_colored(f"Full traceback:\n{traceback.format_exc()}", "red")
     finally:
-        audio_processor.cleanup()
+        print_colored("WebSocket connection closed.", "cyan")
         await websocket.close()
 
-
-audio_processor = AudioProcessor(model=model, prompt_path=args.prompt_path)
-
+# --- Main Execution ---
 if __name__ == "__main__":
+    print_colored("Starting FastAPI server...", "green")
+    # It's recommended to run the server with `uvicorn inference_server:app --reload`
+    # from the command line for development.
     uvicorn.run(app, host="0.0.0.0", port=8000)
-    print("Server started")
