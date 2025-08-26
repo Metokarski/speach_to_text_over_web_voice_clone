@@ -11,8 +11,17 @@ import json
 import io
 import argparse
 import os
+import logging
 from dotenv import load_dotenv
 from ocr_component import ocr_component
+
+# --- Professional Logging Setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - [CLIENT - MAIN] - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 def get_server_ip():
@@ -27,18 +36,18 @@ def get_server_ip():
     parser.add_argument("--server_ip", type=str, help="The IP address of the backend server.")
     args, _ = parser.parse_known_args()
     if args.server_ip:
-        print(f"Using server IP from command-line argument: {args.server_ip}")
+        logger.info(f"Using server IP from command-line argument: {args.server_ip}")
         return args.server_ip
 
     # 2. Check for environment variable
     load_dotenv()
     server_ip_env = os.getenv("SERVER_IP")
     if server_ip_env:
-        print(f"Using server IP from .env file: {server_ip_env}")
+        logger.info(f"Using server IP from .env file: {server_ip_env}")
         return server_ip_env
 
     # 3. Use default value
-    print("Using default server IP: localhost")
+    logger.info("Using default server IP: localhost")
     return "localhost"
 
 SERVER_IP = get_server_ip()
@@ -68,12 +77,16 @@ with st.sidebar:
         if st.button("Upload and Set as Reference"):
             files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
             try:
+                logger.info(f"Uploading reference audio: {uploaded_file.name}")
                 response = requests.post(f"{HTTP_SERVER_URL}/upload_reference_audio", files=files)
                 if response.status_code == 200:
+                    logger.info("Reference audio uploaded successfully.")
                     st.success(f"Reference audio '{uploaded_file.name}' uploaded successfully!")
                 else:
+                    logger.error(f"Error uploading file: {response.status_code} - {response.text}")
                     st.error(f"Error uploading file: {response.text}")
             except requests.exceptions.RequestException as e:
+                logger.error(f"Connection error during upload: {e}", exc_info=True)
                 st.error(f"Connection error: {e}")
 
     st.header("2. Input Text")
@@ -84,10 +97,14 @@ with st.sidebar:
             async def send_text():
                 try:
                     if st.session_state.ws is None or st.session_state.ws.closed:
+                        logger.info("WebSocket is not connected. Attempting to connect...")
                         st.session_state.ws = await websockets.connect(f"{SERVER_URL}/audio")
+                        logger.info("WebSocket connection established.")
                     
+                    logger.info(f"Sending text to server: '{text_input[:100]}...'")
                     await st.session_state.ws.send(json.dumps({"text": text_input}))
                 except Exception as e:
+                    logger.error(f"Failed to send text via WebSocket: {e}", exc_info=True)
                     st.error(f"Failed to send text: {e}")
 
             asyncio.run(send_text())
@@ -102,10 +119,14 @@ with st.sidebar:
             async def send_ocr_text():
                 try:
                     if st.session_state.ws is None or st.session_state.ws.closed:
+                        logger.info("WebSocket is not connected. Attempting to connect...")
                         st.session_state.ws = await websockets.connect(f"{SERVER_URL}/audio")
+                        logger.info("WebSocket connection established.")
                     
+                    logger.info(f"Sending OCR text to server: '{ocr_text[:100]}...'")
                     await st.session_state.ws.send(json.dumps({"text": ocr_text}))
                 except Exception as e:
+                    logger.error(f"Failed to send OCR text via WebSocket: {e}", exc_info=True)
                     st.error(f"Failed to send OCR text: {e}")
             asyncio.run(send_ocr_text())
 
@@ -123,10 +144,12 @@ async def audio_listener():
                 continue
 
             message = await st.session_state.ws.recv()
+            logger.debug("Received a message from WebSocket.")
             
-            if message.startswith("data:audio/raw;base64,"):
+            if isinstance(message, str) and message.startswith("data:audio/raw;base64,"):
                 audio_b64 = message.split(",")[1]
                 audio_bytes = base64.b64decode(audio_b64)
+                logger.info(f"Received {len(audio_bytes)} bytes of audio data.")
                 
                 # Assuming the server sends 16kHz mono audio
                 audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
@@ -139,10 +162,12 @@ async def audio_listener():
                 audio_placeholder.audio(buffer, format='audio/wav')
 
         except websockets.exceptions.ConnectionClosed:
+            logger.warning("WebSocket connection closed by server.")
             st.warning("WebSocket connection closed. Reconnecting...")
             st.session_state.ws = None
             await asyncio.sleep(2)
         except Exception as e:
+            logger.error(f"An error occurred in the audio listener: {e}", exc_info=True)
             st.error(f"An error occurred in the audio listener: {e}")
             await asyncio.sleep(2)
 
@@ -159,8 +184,11 @@ async def main():
     # Start the WebSocket connection when the app loads
     if st.session_state.ws is None:
         try:
+            logger.info(f"Attempting initial WebSocket connection to {SERVER_URL}/audio")
             st.session_state.ws = await websockets.connect(f"{SERVER_URL}/audio")
+            logger.info("Initial WebSocket connection successful.")
         except Exception as e:
+            logger.error(f"Could not connect to WebSocket server on startup: {e}", exc_info=True)
             st.error(f"Could not connect to WebSocket server: {e}")
     
     # Run the listener

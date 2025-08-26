@@ -3,26 +3,21 @@ import base64
 import uvicorn
 import traceback
 import numpy as np
+import logging
+import time
 from fastapi import FastAPI, WebSocket, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 import soundfile as sf
 
 from llasa_model import generate_audio
 
-# --- Helper Functions ---
-def print_colored(text, color):
-    """Prints text in a specified color."""
-    colors = {
-        "red": "\033[91m",
-        "green": "\033[92m",
-        "yellow": "\033[93m",
-        "blue": "\033[94m",
-        "cyan": "\033[96m",
-        "grey": "\033[90m",
-        "end": "\033[0m",
-    }
-    color_code = colors.get(color, "")
-    print(f"{color_code}{text}{colors['end']}")
+# --- Professional Logging Setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 # --- Application Setup ---
 app = FastAPI()
@@ -62,10 +57,10 @@ async def upload_reference_audio(file: UploadFile = File(...)):
             f.write(content)
             
         current_reference_audio = file_path
-        print_colored(f"Reference audio updated to: {current_reference_audio}", "green")
+        logger.info(f"Reference audio updated to: {current_reference_audio}")
         return {"message": f"File '{file.filename}' uploaded successfully.", "status": "success"}
     except Exception as e:
-        print_colored(f"Error uploading file: {str(e)}", "red")
+        logger.error(f"Error uploading file: {str(e)}", exc_info=True)
         return {"message": f"Error uploading file: {str(e)}", "status": "error"}
 
 # --- WebSocket Endpoint ---
@@ -76,7 +71,7 @@ async def websocket_endpoint(websocket: WebSocket):
     Receives text, generates audio, and streams it back to the client.
     """
     await websocket.accept()
-    print_colored("WebSocket connection established.", "cyan")
+    logger.info(f"WebSocket connection established with client: {websocket.client.host}:{websocket.client.port}")
     
     try:
         while True:
@@ -88,18 +83,25 @@ async def websocket_endpoint(websocket: WebSocket):
                 continue
 
             if current_reference_audio is None:
-                print_colored("Warning: No reference audio has been uploaded.", "yellow")
-                # Optionally, send a warning back to the client
+                logger.warning("TTS request received but no reference audio is set.")
                 await websocket.send_json({"error": "Please upload a reference audio file first."})
                 continue
 
-            print_colored(f"Received text for TTS: '{text}'", "grey")
+            logger.info(f"Received text for TTS: '{text[:100]}...'")
+            logger.debug(f"Using reference audio: {current_reference_audio}")
 
+            # --- Performance Timing ---
+            start_time = time.time()
+            
             # Generate audio using the Llasa-3B model
             waveform, sample_rate = generate_audio(text, current_reference_audio)
+            
+            end_time = time.time()
+            processing_time = end_time - start_time
+            logger.info(f"Audio generation took {processing_time:.2f} seconds.")
 
             if waveform.size == 0:
-                print_colored("Audio generation failed. Skipping.", "red")
+                logger.error("Audio generation failed, returned empty waveform.")
                 continue
 
             # Convert audio to 16-bit PCM format
@@ -110,18 +112,19 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # Send the processed audio back to the client
             await websocket.send_text(f"data:audio/raw;base64,{processed_data}")
-            print_colored(f"Sent {len(waveform_int16) / sample_rate:.2f}s of audio to client.", "grey")
+            
+            duration_s = len(waveform_int16) / sample_rate
+            logger.info(f"Sent {duration_s:.2f}s of audio to client.")
 
     except Exception as e:
-        print_colored(f"WebSocket error: {e}", "red")
-        print_colored(f"Full traceback:\n{traceback.format_exc()}", "red")
+        logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
-        print_colored("WebSocket connection closed.", "cyan")
+        logger.info(f"WebSocket connection closed with client: {websocket.client.host}:{websocket.client.port}")
         await websocket.close()
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    print_colored("Starting FastAPI server...", "green")
+    logger.info("Starting FastAPI server...")
     # It's recommended to run the server with `uvicorn inference_server:app --reload`
     # from the command line for development.
     uvicorn.run(app, host="0.0.0.0", port=8000)
