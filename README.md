@@ -6,14 +6,27 @@ This repository has been refactored to provide a web-based interface for the [HK
 
 ## Setup
 
-1.  **Install Dependencies**:
+1.  **Create and Activate a Virtual Environment**:
+    It is highly recommended to use a virtual environment to manage project-specific dependencies.
+
+    ```bash
+    # Create the virtual environment
+    python3 -m venv .venv
+
+    # Activate the virtual environment
+    source .venv/bin/activate
+    ```
+    *On Windows, the activation command is `.\.venv\Scripts\activate`*
+
+2.  **Install Dependencies**:
+    Once the virtual environment is activated, install the required packages:
     ```bash
     pip install -r requirements.txt
     pip install -r requirements_webrtc.txt
     ```
     For the camera-based OCR feature, you will also need to install Tesseract on your system.
 
-2.  **Configure Environment Variables**:
+3.  **Configure Environment Variables**:
     Create a `.env` file in the root of the project by copying the `.env.example` file:
     ```bash
     cp .env.example .env

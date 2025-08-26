@@ -47,7 +47,7 @@ def ocr_component():
         media_stream_constraints={"video": True, "audio": False},
         video_frame_callback=None, # We will process frames manually
         async_processing=True,
-        video_receiver_size=16
+        video_receiver_size=64
     )
 
     text_placeholder = st.empty()
